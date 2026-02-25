@@ -51,10 +51,9 @@ def send_telegram_alert(message):
         print(f"⚠️ Telegram Error: {e}")
 
 def get_portfolio_from_redis():
-    """دریافت اطلاعات پرتفو از Redis (اگر از طریق تلگرام تنظیم شده باشد)"""
+    """دریافت اطلاعات پرتفو از Redis"""
     if not redis_client:
         return None, None, None, None
-    
     try:
         portfolio_data = redis_client.get("user_portfolio")
         if portfolio_data:
@@ -68,7 +67,6 @@ def get_portfolio_from_redis():
             )
     except Exception as e:
         print(f"⚠️ Error reading portfolio from Redis: {e}")
-    
     return None, None, None, None
 
 def get_portfolio_from_env():
@@ -78,13 +76,11 @@ def get_portfolio_from_env():
         gold_avg = float(os.getenv('PF_GOLD_AVG', 0))
         silver_qty = float(os.getenv('PF_SILVER_QTY', 0))
         silver_avg = float(os.getenv('PF_SILVER_AVG', 0))
-        
         if gold_qty > 0 or silver_qty > 0:
             print(f"📊 Portfolio loaded from GitHub Variables")
             return gold_qty, gold_avg, silver_qty, silver_avg
     except ValueError:
         pass
-    
     return None, None, None, None
 
 def fetch_asset_data(asset_name):
@@ -124,7 +120,6 @@ def calculate_metrics(current_price, buy_avg, qty, asset_name):
     """محاسبه دقیق سود، زیان، کارمزد و نقطه سر‌به‌سر"""
     if qty == 0 or buy_avg == 0:
         return None
-        
     current_value = current_price * qty
     total_cost = buy_avg * qty
     fee = current_value * 0.01
@@ -156,8 +151,6 @@ def main():
     
     if not gold_data or not silver_data:
         print("⛔ Failed to fetch live data. Exiting.")
-        # حتی در صورت خطا، یک فایل JSON خالی نسازیم که سایت خطا ندهد
-        # از کش ردیس استفاده می‌کنیم
         if redis_client:
             cached = redis_client.get("latest_market_data")
             if cached:
@@ -166,33 +159,40 @@ def main():
                 print("📄 Wrote cached data to JSON.")
         return
 
-    # تبدیل به تومان و اعمال ضریب
-    gold_price_toman = (gold_data['price_rial'] / 10.0) * 0.75
-    silver_price_toman = silver_data['price_rial'] / 10.0
+    # --- تبدیل قیمت‌ها ---
+    # طلای 24 عیار (قیمت خام از API - تقسیم بر 10 برای تومان)
+    gold_24k_toman = gold_data['price_rial'] / 10.0
+    
+    # طلای 18 عیار (ضربدر 0.75 برای تبدیل 24 به 18 عیار)
+    gold_18k_toman = gold_24k_toman * 0.75
+    
+    # نقره (تقسیم بر 10 برای تومان)
+    silver_toman = silver_data['price_rial'] / 10.0
     
     gold_change = gold_data['daily_change']
     silver_change = silver_data['daily_change']
 
-    print(f"💰 Gold: {gold_price_toman:,.0f} T ({gold_change:.2f}%) | Silver: {silver_price_toman:,.0f} T ({silver_change:.2f}%)")
+    print(f"💰 Gold 24K: {gold_24k_toman:,.0f} T | Gold 18K: {gold_18k_toman:,.0f} T ({gold_change:.2f}%)")
+    print(f"💰 Silver: {silver_toman:,.0f} T ({silver_change:.2f}%)")
 
-    # 2. بررسی هشدارهای قیمت (دو طرفه)
-    if gold_price_toman >= GOLD_PRICE_HIGH:
-        msg = f"🔺 **هشدار طلا (سقف)**: قیمت به {gold_price_toman:,.0f} رسید"
+    # 2. بررسی هشدارهای قیمت (بر اساس طلای 18 عیار)
+    if gold_18k_toman >= GOLD_PRICE_HIGH:
+        msg = f"🔺 **هشدار طلا (سقف)**: قیمت به {gold_18k_toman:,.0f} رسید"
         send_telegram_alert(msg)
         alerts.append({"type": "price_high", "asset": "gold", "message": msg})
     
-    if gold_price_toman <= GOLD_PRICE_LOW:
-        msg = f"🔻 **هشدار طلا (کف)**: قیمت به {gold_price_toman:,.0f} رسید"
+    if gold_18k_toman <= GOLD_PRICE_LOW:
+        msg = f"🔻 **هشدار طلا (کف)**: قیمت به {gold_18k_toman:,.0f} رسید"
         send_telegram_alert(msg)
         alerts.append({"type": "price_low", "asset": "gold", "message": msg})
 
-    if silver_price_toman >= SILVER_PRICE_HIGH:
-        msg = f"🔺 **هشدار نقره (سقف)**: قیمت به {silver_price_toman:,.0f} رسید"
+    if silver_toman >= SILVER_PRICE_HIGH:
+        msg = f"🔺 **هشدار نقره (سقف)**: قیمت به {silver_toman:,.0f} رسید"
         send_telegram_alert(msg)
         alerts.append({"type": "price_high", "asset": "silver", "message": msg})
     
-    if silver_price_toman <= SILVER_PRICE_LOW:
-        msg = f"🔻 **هشدار نقره (کف)**: قیمت به {silver_price_toman:,.0f} رسید"
+    if silver_toman <= SILVER_PRICE_LOW:
+        msg = f"🔻 **هشدار نقره (کف)**: قیمت به {silver_toman:,.0f} رسید"
         send_telegram_alert(msg)
         alerts.append({"type": "price_low", "asset": "silver", "message": msg})
 
@@ -201,11 +201,11 @@ def main():
     if gold_qty is None:
         gold_qty, gold_avg, silver_qty, silver_avg = get_portfolio_from_env()
     
-    # 4. محاسبات پرتفو
+    # 4. محاسبات پرتفو (بر اساس طلای 18 عیار)
     portfolio_summary = {}
     if (gold_qty and gold_avg) or (silver_qty and silver_avg):
-        gold_metrics = calculate_metrics(gold_price_toman, gold_avg or 0, gold_qty or 0, "Gold") if gold_qty and gold_avg else None
-        silver_metrics = calculate_metrics(silver_price_toman, silver_avg or 0, silver_qty or 0, "Silver") if silver_qty and silver_avg else None
+        gold_metrics = calculate_metrics(gold_18k_toman, gold_avg or 0, gold_qty or 0, "Gold") if gold_qty and gold_avg else None
+        silver_metrics = calculate_metrics(silver_toman, silver_avg or 0, silver_qty or 0, "Silver") if silver_qty and silver_avg else None
         
         total_invested = 0
         total_current_val = 0
@@ -235,7 +235,8 @@ def main():
             portfolio_summary["assets"]["gold"] = {
                 "qty": gold_qty,
                 "buy_avg": gold_avg,
-                "current_price": gold_price_toman,
+                "current_price_18k": gold_18k_toman,
+                "current_price_24k": gold_24k_toman,
                 "daily_change_percent": round(gold_change, 2),
                 "metrics": gold_metrics
             }
@@ -244,7 +245,7 @@ def main():
             portfolio_summary["assets"]["silver"] = {
                 "qty": silver_qty,
                 "buy_avg": silver_avg,
-                "current_price": silver_price_toman,
+                "current_price": silver_toman,
                 "daily_change_percent": round(silver_change, 2),
                 "metrics": silver_metrics
             }
@@ -262,8 +263,8 @@ def main():
             send_telegram_alert(msg)
             alerts.append({"type": "loss_limit", "message": msg})
     else:
-        print("⚠️ No portfolio data available (set via Telegram or GitHub Variables)")
-        portfolio_summary = {"message": "Portfolio not configured. Send /setportfolio to bot or set GitHub Variables."}
+        print("⚠️ No portfolio data available")
+        portfolio_summary = {"message": "Portfolio not configured."}
 
     # 6. خروجی نهایی
     final_payload = {
@@ -271,8 +272,15 @@ def main():
         "last_updated_iso": timestamp,
         "market_status": "open",
         "assets_summary": {
-            "gold": {"price_toman": round(gold_price_toman, 2), "daily_change_percent": round(gold_change, 2)},
-            "silver": {"price_toman": round(silver_price_toman, 2), "daily_change_percent": round(silver_change, 2)}
+            "gold": {
+                "price_24k_toman": round(gold_24k_toman, 2),
+                "price_18k_toman": round(gold_18k_toman, 2),
+                "daily_change_percent": round(gold_change, 2)
+            },
+            "silver": {
+                "price_toman": round(silver_toman, 2),
+                "daily_change_percent": round(silver_change, 2)
+            }
         },
         "portfolio": portfolio_summary,
         "alerts": alerts
@@ -282,7 +290,7 @@ def main():
     if redis_client:
         try:
             redis_client.set("latest_market_data", json.dumps(final_payload))
-            history_item = {"time": timestamp, "gold": gold_price_toman, "silver": silver_price_toman, "npl": portfolio_summary.get("total_npl_percent", 0)}
+            history_item = {"time": timestamp, "gold_18k": gold_18k_toman, "gold_24k": gold_24k_toman, "silver": silver_toman, "npl": portfolio_summary.get("total_npl_percent", 0)}
             redis_client.lpush("market_history", json.dumps(history_item))
             redis_client.ltrim("market_history", 0, 99)
             print("💾 Data saved to Redis.")

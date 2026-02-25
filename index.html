@@ -91,6 +91,12 @@
             margin: 10px 0;
         }
 
+        .price-sub {
+            font-size: 1.1rem;
+            color: var(--text-secondary);
+            margin-top: 5px;
+        }
+
         .stats-row {
             display: flex;
             justify-content: space-between;
@@ -135,17 +141,18 @@
 
     <div id="dashboard" style="display: none;">
         <div class="grid-dashboard">
-            <!-- کارت طلا -->
+            <!-- کارت طلا (نمایش 24 عیار + 18 عیار) -->
             <div class="card gold">
                 <div class="card-header">
-                    <span class="card-title">طلای ۱۸ عیار (معادل)</span>
+                    <span class="card-title">طلا</span>
                     <span class="icon">🥇</span>
                 </div>
-                <div class="price-display" id="gold-price">-</div>
-                <div style="color: var(--text-secondary); font-size: 0.9rem;">تومان</div>
+                <div class="price-display" id="gold-24k-price">-</div>
+                <div class="price-sub" id="gold-18k-price">18 عیار: -</div>
+                <div style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 5px;">تومان</div>
                 <div class="stats-row">
                     <div class="stat-item">
-                        <span class="stat-label">تغییرات ۲۴ ساعته</span>
+                        <span class="stat-label">تغییرات 24 ساعته</span>
                         <span class="stat-value" id="gold-change">-%</span>
                     </div>
                     <div class="stat-item">
@@ -172,10 +179,10 @@
                     <span class="icon">🥈</span>
                 </div>
                 <div class="price-display" id="silver-price">-</div>
-                <div style="color: var(--text-secondary); font-size: 0.9rem;">تومان</div>
+                <div style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 5px;">تومان</div>
                 <div class="stats-row">
                     <div class="stat-item">
-                        <span class="stat-label">تغییرات ۲۴ ساعته</span>
+                        <span class="stat-label">تغییرات 24 ساعته</span>
                         <span class="stat-value" id="silver-change">-%</span>
                     </div>
                     <div class="stat-item">
@@ -208,7 +215,7 @@
                         <div style="font-size: 0.8rem; color: var(--text-secondary);">تومان</div>
                     </div>
                     <div class="stat-item">
-                        <span class="stat-label">سود/زیان خالص (کسر ۱٪ کارمزد)</span>
+                        <span class="stat-label">سود/زیان خالص (کسر 1٪ کارمزد)</span>
                         <span class="stat-value" id="total-profit-percent" style="font-size: 1.4rem;">-%</span>
                         <div style="font-size: 0.8rem; color: var(--text-secondary);">درصد</div>
                     </div>
@@ -224,13 +231,26 @@
 </div>
 
 <script>
-    // خواندن فایل JSON از همان پوشه (GitHub Pages)
+    // ============================================
+    // 🔁 مکانیسم Auto-Refresh (بروزرسانی خودکار)
+    // ============================================
+    // این اسکریپت هر 60 ثانیه (60000 میلی‌ثانیه) به صورت خودکار
+    // فایل market_data.json را از سرور می‌خواند و داشبورد را آپدیت می‌کند.
+    // 
+    // روش کار:
+    // 1. fetchData() را بلافاصله پس از لود صفحه اجرا می‌کند
+    // 2. سپس با setInterval هر 60 ثانیه تکرار می‌کند
+    // 3. با اضافه کردن timestamp به URL، از کش شدن فایل جلوگیری می‌کند
+    // ============================================
+
     const DATA_URL = 'market_data.json';
 
     console.log(`📡 Connecting to: ${DATA_URL}`);
+    console.log(`🔄 Auto-refresh: Every 60 seconds`);
 
     async function fetchData() {
         try {
+            // افزودن timestamp برای جلوگیری از کش مرورگر
             const response = await fetch(`${DATA_URL}?t=${new Date().getTime()}`);
             
             if (!response.ok) {
@@ -239,6 +259,7 @@
             
             const data = await response.json();
             renderDashboard(data);
+            console.log('✅ Data refreshed at', new Date().toLocaleTimeString('fa-IR'));
         } catch (error) {
             console.error("Fetch error:", error);
             const statusEl = document.getElementById('last-update');
@@ -256,13 +277,20 @@
         document.getElementById('last-update').innerText = `آخرین بروزرسانی: ${updateTime}`;
         document.getElementById('last-update').style.color = "#27ae60";
 
-        // --- طلا (تطبیق با ساختار assets_summary از پایتون) ---
+        // --- طلا (نمایش 24 عیار + 18 عیار) ---
         const gold = data.assets_summary?.gold;
         if (gold) {
-            document.getElementById('gold-price').innerText = Number(gold.price_toman).toLocaleString();
+            // قیمت طلای 24 عیار (اصلی)
+            document.getElementById('gold-24k-price').innerText = Number(gold.price_24k_toman).toLocaleString();
+            
+            // قیمت طلای 18 عیار (فرعی)
+            document.getElementById('gold-18k-price').innerText = `18 عیار: ${Number(gold.price_18k_toman).toLocaleString()}`;
+            
+            // تغییرات 24 ساعته
             document.getElementById('gold-change').innerText = `${gold.daily_change_percent > 0 ? '+' : ''}${gold.daily_change_percent}%`;
             document.getElementById('gold-change').style.color = gold.daily_change_percent >= 0 ? 'var(--success-color)' : 'var(--danger-color)';
             
+            // داده‌های پرتفو
             const goldPortfolio = data.portfolio?.assets?.gold;
             if (goldPortfolio && goldPortfolio.metrics) {
                 const m = goldPortfolio.metrics;
@@ -317,9 +345,10 @@
         }
     }
 
-    // اجرای اولیه
+    // اجرای اولیه بلافاصله پس از لود صفحه
     fetchData();
-    // بروزرسانی خودکار هر ۶۰ ثانیه
+    
+    // اجرای خودکار هر 60 ثانیه (60000 میلی‌ثانیه)
     setInterval(fetchData, 60000);
 </script>
 
