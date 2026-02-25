@@ -1,10 +1,15 @@
 name: Update Market Data & Deploy Site
 
+# --- بخش حیاتی: تعریف دسترسی‌های لازم ---
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 on:
   schedule:
-    # اجرا هر 5 دقیقه
     - cron: '*/5 * * * *'
-  workflow_dispatch: # امکان اجرای دستی
+  workflow_dispatch:
 
 jobs:
   process-and-deploy:
@@ -13,13 +18,13 @@ jobs:
     steps:
       # 1. دریافت کدها
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # 2. تنظیم پایتون
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -44,17 +49,17 @@ jobs:
           sed -i "s/window.GH_USER = ''/window.GH_USER = '${{ github.repository_owner }}'/g" index.html
           sed -i "s/window.GH_REPO = 'charisma-monitor'/window.GH_REPO = '${{ github.event.repository.name }}'/g" index.html
 
-      # 6. تنظیمات Pages
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v3
+      # 6. تنظیمات صفحات
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
 
-      # 7. آپلود فایل‌ها (اصلاح شده به v4)
+      # 7. آپلود فایل‌ها (نسخه جدید v4)
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
 
-      # 8. انتشار سایت (اصلاح شده به v3 برای هماهنگی)
+      # 8. انتشار سایت (نسخه جدید v3)
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
