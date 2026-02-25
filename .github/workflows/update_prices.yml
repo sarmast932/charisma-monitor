@@ -7,7 +7,7 @@ permissions:
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/1 * * * *'  # تغییر از 5 دقیقه به 1 دقیقه
   workflow_dispatch:
 
 jobs:
@@ -36,7 +36,6 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           UPSTASH_URL: ${{ secrets.UPSTASH_URL }}
           UPSTASH_TOKEN: ${{ secrets.UPSTASH_TOKEN }}
-          # Variables را مستقیم پاس می‌دهیم
           PF_GOLD_QTY: ${{ vars.PF_GOLD_QTY }}
           PF_GOLD_AVG: ${{ vars.PF_GOLD_AVG }}
           PF_SILVER_QTY: ${{ vars.PF_SILVER_QTY }}
