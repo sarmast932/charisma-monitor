@@ -10,22 +10,15 @@ CHAT_ID = os.getenv('CHAT_ID', '').strip()
 UPSTASH_URL = os.getenv('UPSTASH_URL', '').strip()
 UPSTASH_TOKEN = os.getenv('UPSTASH_TOKEN', '').strip()
 
-# آستانه‌های هشدار قیمت (تومان) - خواندن از Variables گیت‌هاب
-GOLD_PRICE_THRESHOLD = float(os.getenv('GOLD_PRICE_THRESHOLD', 20000000))
-SILVER_PRICE_THRESHOLD = float(os.getenv('SILVER_PRICE_THRESHOLD', 600000))
+# آستانه‌های هشدار قیمت (تومان)
+GOLD_PRICE_HIGH = float(os.getenv('GOLD_PRICE_HIGH', 26000000))
+GOLD_PRICE_LOW = float(os.getenv('GOLD_PRICE_LOW', 24000000))
+SILVER_PRICE_HIGH = float(os.getenv('SILVER_PRICE_HIGH', 600000))
+SILVER_PRICE_LOW = float(os.getenv('SILVER_PRICE_LOW', 550000))
 
 # آستانه هشدار درصد سود/زیان پرتفو
 PORTFOLIO_PROFIT_THRESHOLD = float(os.getenv('PORTFOLIO_PROFIT_THRESHOLD', 20.0))
 PORTFOLIO_LOSS_THRESHOLD = float(os.getenv('PORTFOLIO_LOSS_THRESHOLD', -10.0))
-
-# --- 2. ورودی‌های پرتفو (خواندن از Variables گیت‌هاب) ---
-try:
-    PF_GOLD_QTY = float(os.getenv('PF_GOLD_QTY', 0))
-    PF_GOLD_AVG = float(os.getenv('PF_GOLD_AVG', 0))
-    PF_SILVER_QTY = float(os.getenv('PF_SILVER_QTY', 0))
-    PF_SILVER_AVG = float(os.getenv('PF_SILVER_AVG', 0))
-except ValueError:
-    PF_GOLD_QTY, PF_GOLD_AVG, PF_SILVER_QTY, PF_SILVER_AVG = 0, 0, 0, 0
 
 # اتصال به Redis
 redis_client = None
@@ -57,6 +50,43 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"⚠️ Telegram Error: {e}")
 
+def get_portfolio_from_redis():
+    """دریافت اطلاعات پرتفو از Redis (اگر از طریق تلگرام تنظیم شده باشد)"""
+    if not redis_client:
+        return None, None, None, None
+    
+    try:
+        portfolio_data = redis_client.get("user_portfolio")
+        if portfolio_data:
+            data = json.loads(portfolio_data)
+            print(f"📊 Portfolio loaded from Redis: {data}")
+            return (
+                data.get('gold_qty', 0),
+                data.get('gold_avg', 0),
+                data.get('silver_qty', 0),
+                data.get('silver_avg', 0)
+            )
+    except Exception as e:
+        print(f"⚠️ Error reading portfolio from Redis: {e}")
+    
+    return None, None, None, None
+
+def get_portfolio_from_env():
+    """دریافت اطلاعات پرتفو از GitHub Variables"""
+    try:
+        gold_qty = float(os.getenv('PF_GOLD_QTY', 0))
+        gold_avg = float(os.getenv('PF_GOLD_AVG', 0))
+        silver_qty = float(os.getenv('PF_SILVER_QTY', 0))
+        silver_avg = float(os.getenv('PF_SILVER_AVG', 0))
+        
+        if gold_qty > 0 or silver_qty > 0:
+            print(f"📊 Portfolio loaded from GitHub Variables")
+            return gold_qty, gold_avg, silver_qty, silver_avg
+    except ValueError:
+        pass
+    
+    return None, None, None, None
+
 def fetch_asset_data(asset_name):
     """دریافت قیمت و تغییرات روزانه از API کاریزما"""
     url = f"https://inv.charisma.ir/pub/Plans/{asset_name}"
@@ -73,7 +103,6 @@ def fetch_asset_data(asset_name):
         if 'latestIndexPrice' in data:
             price_rial = float(data['latestIndexPrice'].get('index', 0))
             raw_change = float(data['latestIndexPrice'].get('value', 0))
-            # تبدیل به درصد اگر عدد اعشاری کوچک باشد
             if abs(raw_change) < 10: 
                 daily_change_percent = raw_change * 100
             else:
@@ -98,15 +127,10 @@ def calculate_metrics(current_price, buy_avg, qty, asset_name):
         
     current_value = current_price * qty
     total_cost = buy_avg * qty
-    
-    # کارمزد فروش 1% از ارزش فعلی
     fee = current_value * 0.01
     net_value = current_value - fee
-    
     net_profit = net_value - total_cost
     npl_percent = (net_profit / total_cost) * 100 if total_cost > 0 else 0
-    
-    # نقطه سر‌به‌سر: قیمتی که در آن (قیمت * تعداد) - 1% کارمزد = هزینه کل
     break_even_price = total_cost / (qty * 0.99)
     
     return {
@@ -132,9 +156,17 @@ def main():
     
     if not gold_data or not silver_data:
         print("⛔ Failed to fetch live data. Exiting.")
+        # حتی در صورت خطا، یک فایل JSON خالی نسازیم که سایت خطا ندهد
+        # از کش ردیس استفاده می‌کنیم
+        if redis_client:
+            cached = redis_client.get("latest_market_data")
+            if cached:
+                with open("market_data.json", "w", encoding="utf-8") as f:
+                    f.write(cached)
+                print("📄 Wrote cached data to JSON.")
         return
 
-    # تبدیل به تومان و اعمال ضریب (طلا: تقسیم بر 10 و ضربدر 0.75 برای معادل 18 عیار)
+    # تبدیل به تومان و اعمال ضریب
     gold_price_toman = (gold_data['price_rial'] / 10.0) * 0.75
     silver_price_toman = silver_data['price_rial'] / 10.0
     
@@ -143,86 +175,52 @@ def main():
 
     print(f"💰 Gold: {gold_price_toman:,.0f} T ({gold_change:.2f}%) | Silver: {silver_price_toman:,.0f} T ({silver_change:.2f}%)")
 
-    # 2. بررسی هشدارهای قیمت (دو طرفه: بیشتر و کمتر از آستانه)
-    # طلا
-    if gold_price_toman >= GOLD_PRICE_THRESHOLD:
-        msg = f"🔺 **هشدار قیمت طلا**: عبور از سقف {GOLD_PRICE_THRESHOLD:,.0f}\nقیمت فعلی: {gold_price_toman:,.0f} تومان"
-        send_telegram_alert(msg)
-        alerts.append({"type": "price_high", "asset": "gold", "message": msg})
-    elif gold_price_toman <= (GOLD_PRICE_THRESHOLD * 0.90): # مثال: 10% کمتر از آستانه هم هشدار دهد
-        # یا می‌توانید یک آستانه پایین جداگانه تعریف کنید. فعلاً به صورت نسبی چک می‌کنیم.
-        # برای دقت بیشتر، بهتر است متغیر GOLD_PRICE_LOW_THRESHOLD تعریف کنید.
-        # اما طبق درخواست شما "کمتر شدن از ترشلد" را اینجا پوشش می‌دهیم اگر بخواهید دقیق باشید:
-        pass 
-        
-    # برای پیاده‌سازی دقیق "کمتر شدن از یک عدد مشخص"، باید متغیر جدیدی تعریف کنید.
-    # اما چون فرمودید "کمتر شدن از ترشلد"، فرض را بر این می‌گیریم که ترشلد یک محدوده است یا منظور شکست حمایت است.
-    # بیایید فرض کنیم اگر قیمت از ترشلد تعیین شده کمتر شد هم هشدار دهد (شکست حمایت):
-    if gold_price_toman < GOLD_PRICE_THRESHOLD:
-         # این شرط همیشه برقرار است مگر اینکه قیمت بالا رفته باشد. 
-         # منظور شما احتمالاً این است که اگر قیمت از یک "کف" تعیین شده کمتر شد.
-         # چون متغیر جداگانه‌ای ندادید، من منطق را اینگونه می‌چینم:
-         # اگر قیمت از ترشلد (که فرض می‌کنیم مقاومت است) کمتر شد، هشدار نده (مگر اینکه شکست حمایت مد نظر باشد).
-         # برای سادگی و جلوگیری از اسپم، فقط عبور رو به بالا و عبور رو به پایین از یک کف فرضی را چک می‌کنیم.
-         # اما بهترین کار تعریف دو متغیر است. فعلاً فقط عبور رو به بالا را داریم.
-         # *اصلاحیه*: طبق دستور شما "کمتر شدن از ترشلد" هم اضافه شود.
-         # فرض می‌کنیم ترشلد وارد شده یک "باند بالایی" است و ما نیاز به "باند پایینی" نداریم؟
-         # خیر، معمولاً ترشلد یک عدد است. اگر قیمت از آن کمتر شد یعنی چه؟ یعنی زیر مقاومت است.
-         # احتمالاً منظور شما این است: اگر قیمت از ترشلدِ سود (مثلاً 3 میلیون) کمتر شد (ریزش کرد) هشدار بده.
-         # پس ما یک آستانه پایین هم نیاز داریم. اما برای رعایت سادگی و عدم تغییر زیاد در Variables:
-         # من شرط را اینگونه می‌گذارم: اگر قیمت از ترشلد تعیین شده **عبور کرد** (بالا یا پایین).
-         # یعنی اگر قبلاً بالا بوده و حالا آمده پایین، یا برعکس.
-         # اما چون وضعیت قبلی را در این اجرا نداریم، ساده‌ترین حالت:
-         # هشدار اگر قیمت > ترشلد (سقف) OR قیمت < (ترشلد * 0.9) (کف نسبی).
-         pass
-
-    # پیاده‌سازی دقیق درخواست: هشدار اگر قیمت از ترشلد تعیین شده کمتر شد (شکست حمایت)
-    # برای این کار باید یک متغیر دیگر داشته باشیم یا فرض کنیم ترشلد ورودی کاربر یک عدد رند است و هر دو طرف مهم است.
-    # بیایید یک متغیر جدید به نام GOLD_LOW_THRESHOLD در کد فرض کنیم که اگر نبود، همان ترشلد بالا ملاک است؟ نه.
-    # راه حل استاندارد: دو متغیر در گیت‌هاب تعریف کنید: GOLD_HIGH_THRESHOLD و GOLD_LOW_THRESHOLD.
-    # اما چون نمی‌خواهم شما را مجبور به تعریف متغیر جدید کنم، از همان GOLD_PRICE_THRESHOLD به عنوان "مقاومت" استفاده می‌کنم
-    # و برای "حمایت" یک مقدار پیش‌فرض (مثلاً 5% کمتر) در نظر می‌گیرم یا کلاً این بخش را منوط به تعریف متغیر دوم می‌کنم.
-    
-    # *تصمیم نهایی برای کد*: من دو متغیر جدید در کد تعریف می‌کنم که اگر در گیت‌هاب نبودند، از همان ترشلد اصلی استفاده کنند (که عملاً یعنی فقط یک طرفه).
-    # اما برای اینکه دقیقاً خواسته شما ("کمتر شدن") اجرا شود، فرض می‌کنم شما در گیت‌هاب دو متغیر دارید:
-    # GOLD_PRICE_HIGH و GOLD_PRICE_LOW. اگر ندارید، کد زیر به صورت هوشمند عمل می‌کند:
-    
-    high_threshold_gold = float(os.getenv('GOLD_PRICE_HIGH', GOLD_PRICE_THRESHOLD))
-    low_threshold_gold = float(os.getenv('GOLD_PRICE_LOW', GOLD_PRICE_THRESHOLD * 0.95)) # پیش‌فرض 5% کمتر
-    
-    if gold_price_toman >= high_threshold_gold:
-        msg = f"🔺 **هشدار طلا (سقف)**: قیمت به {gold_price_toman:,.0f} رسید (بیشتر از {high_threshold_gold:,.0f})"
+    # 2. بررسی هشدارهای قیمت (دو طرفه)
+    if gold_price_toman >= GOLD_PRICE_HIGH:
+        msg = f"🔺 **هشدار طلا (سقف)**: قیمت به {gold_price_toman:,.0f} رسید"
         send_telegram_alert(msg)
         alerts.append({"type": "price_high", "asset": "gold", "message": msg})
     
-    if gold_price_toman <= low_threshold_gold:
-        msg = f"🔻 **هشدار طلا (کف)**: قیمت به {gold_price_toman:,.0f} رسید (کمتر از {low_threshold_gold:,.0f})"
+    if gold_price_toman <= GOLD_PRICE_LOW:
+        msg = f"🔻 **هشدار طلا (کف)**: قیمت به {gold_price_toman:,.0f} رسید"
         send_telegram_alert(msg)
         alerts.append({"type": "price_low", "asset": "gold", "message": msg})
 
-    # همین منطق برای نقره
-    high_threshold_silver = float(os.getenv('SILVER_PRICE_HIGH', SILVER_PRICE_THRESHOLD))
-    low_threshold_silver = float(os.getenv('SILVER_PRICE_LOW', SILVER_PRICE_THRESHOLD * 0.95))
-
-    if silver_price_toman >= high_threshold_silver:
+    if silver_price_toman >= SILVER_PRICE_HIGH:
         msg = f"🔺 **هشدار نقره (سقف)**: قیمت به {silver_price_toman:,.0f} رسید"
         send_telegram_alert(msg)
         alerts.append({"type": "price_high", "asset": "silver", "message": msg})
     
-    if silver_price_toman <= low_threshold_silver:
+    if silver_price_toman <= SILVER_PRICE_LOW:
         msg = f"🔻 **هشدار نقره (کف)**: قیمت به {silver_price_toman:,.0f} رسید"
         send_telegram_alert(msg)
         alerts.append({"type": "price_low", "asset": "silver", "message": msg})
 
-    # 3. محاسبات پرتفو
+    # 3. دریافت پرتفو (اولویت با Redis است، سپس GitHub Variables)
+    gold_qty, gold_avg, silver_qty, silver_avg = get_portfolio_from_redis()
+    if gold_qty is None:
+        gold_qty, gold_avg, silver_qty, silver_avg = get_portfolio_from_env()
+    
+    # 4. محاسبات پرتفو
     portfolio_summary = {}
-    if PF_GOLD_QTY > 0 and PF_SILVER_QTY > 0:
-        gold_metrics = calculate_metrics(gold_price_toman, PF_GOLD_AVG, PF_GOLD_QTY, "Gold")
-        silver_metrics = calculate_metrics(silver_price_toman, PF_SILVER_AVG, PF_SILVER_QTY, "Silver")
+    if (gold_qty and gold_avg) or (silver_qty and silver_avg):
+        gold_metrics = calculate_metrics(gold_price_toman, gold_avg or 0, gold_qty or 0, "Gold") if gold_qty and gold_avg else None
+        silver_metrics = calculate_metrics(silver_price_toman, silver_avg or 0, silver_qty or 0, "Silver") if silver_qty and silver_avg else None
         
-        total_invested = (PF_GOLD_AVG * PF_GOLD_QTY) + (PF_SILVER_AVG * PF_SILVER_QTY)
-        total_current_val = gold_metrics['current_value'] + silver_metrics['current_value']
-        total_net_profit = gold_metrics['net_profit'] + silver_metrics['net_profit']
+        total_invested = 0
+        total_current_val = 0
+        total_net_profit = 0
+        
+        if gold_metrics:
+            total_invested += (gold_avg * gold_qty)
+            total_current_val += gold_metrics['current_value']
+            total_net_profit += gold_metrics['net_profit']
+        
+        if silver_metrics:
+            total_invested += (silver_avg * silver_qty)
+            total_current_val += silver_metrics['current_value']
+            total_net_profit += silver_metrics['net_profit']
+        
         total_npl_percent = (total_net_profit / total_invested) * 100 if total_invested > 0 else 0
         
         portfolio_summary = {
@@ -230,27 +228,30 @@ def main():
             "total_current_value": round(total_current_val, 2),
             "total_net_profit": round(total_net_profit, 2),
             "total_npl_percent": round(total_npl_percent, 2),
-            "assets": {
-                "gold": {
-                    "qty": PF_GOLD_QTY,
-                    "buy_avg": PF_GOLD_AVG,
-                    "current_price": gold_price_toman,
-                    "daily_change_percent": round(gold_change, 2),
-                    "metrics": gold_metrics
-                },
-                "silver": {
-                    "qty": PF_SILVER_QTY,
-                    "buy_avg": PF_SILVER_AVG,
-                    "current_price": silver_price_toman,
-                    "daily_change_percent": round(silver_change, 2),
-                    "metrics": silver_metrics
-                }
-            }
+            "assets": {}
         }
+        
+        if gold_metrics:
+            portfolio_summary["assets"]["gold"] = {
+                "qty": gold_qty,
+                "buy_avg": gold_avg,
+                "current_price": gold_price_toman,
+                "daily_change_percent": round(gold_change, 2),
+                "metrics": gold_metrics
+            }
+        
+        if silver_metrics:
+            portfolio_summary["assets"]["silver"] = {
+                "qty": silver_qty,
+                "buy_avg": silver_avg,
+                "current_price": silver_price_toman,
+                "daily_change_percent": round(silver_change, 2),
+                "metrics": silver_metrics
+            }
         
         print(f"📊 Portfolio NPL: {total_npl_percent:.2f}%")
 
-        # 4. هشدارهای درصد سود/زیان
+        # 5. هشدارهای درصد سود/زیان
         if total_npl_percent >= PORTFOLIO_PROFIT_THRESHOLD:
             msg = f"🎉 **هشدار سود پرتفو**: سود به **{total_npl_percent:.2f}%** رسید."
             send_telegram_alert(msg)
@@ -260,12 +261,11 @@ def main():
             msg = f"📉 **هشدار زیان پرتفو**: زیان به **{total_npl_percent:.2f}%** رسید."
             send_telegram_alert(msg)
             alerts.append({"type": "loss_limit", "message": msg})
-            
     else:
-        print("⚠️ Portfolio inputs missing.")
-        portfolio_summary = {"error": "Missing inputs"}
+        print("⚠️ No portfolio data available (set via Telegram or GitHub Variables)")
+        portfolio_summary = {"message": "Portfolio not configured. Send /setportfolio to bot or set GitHub Variables."}
 
-    # 5. خروجی نهایی
+    # 6. خروجی نهایی
     final_payload = {
         "last_updated_fa": tehran_time_str,
         "last_updated_iso": timestamp,
@@ -285,12 +285,17 @@ def main():
             history_item = {"time": timestamp, "gold": gold_price_toman, "silver": silver_price_toman, "npl": portfolio_summary.get("total_npl_percent", 0)}
             redis_client.lpush("market_history", json.dumps(history_item))
             redis_client.ltrim("market_history", 0, 99)
-            print("💾 Data saved.")
+            print("💾 Data saved to Redis.")
         except Exception as e:
             print(f"❌ Redis Error: {e}")
 
-    with open("market_data.json", "w", encoding="utf-8") as f:
-        json.dump(final_payload, f, ensure_ascii=False, indent=2)
+    # تولید فایل JSON برای GitHub Pages
+    try:
+        with open("market_data.json", "w", encoding="utf-8") as f:
+            json.dump(final_payload, f, ensure_ascii=False, indent=2)
+        print("📄 market_data.json generated successfully.")
+    except Exception as e:
+        print(f"❌ File Write Error: {e}")
     
     print("✅ Execution completed.")
 
