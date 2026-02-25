@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Charisma Investment | مانیتورینگ طلا و نقره</title>
+    <style>
+        :root {
+            --bg-color: #f4f6f8;
+            --card-bg: #ffffff;
+            --text-primary: #2c3e50;
+            --text-secondary: #7f8c8d;
+            --gold-color: #d4af37;
+            --silver-color: #bdc3c7;
+            --success-color: #27ae60;
+            --danger-color: #c0392b;
+            --accent-color: #3498db;
+        }
+
+        body {
+            font-family: 'Tahoma', 'Segoe UI', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container { max-width: 900px; margin: 0 auto; }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+
+        h1 { margin: 0; font-size: 1.8rem; color: var(--text-primary); }
+        .subtitle { color: var(--text-secondary); font-size: 0.9rem; margin-top: 5px; }
+        .last-update { font-size: 0.85rem; color: var(--accent-color); margin-top: 10px; font-weight: bold; }
+
+        .alert-box {
+            background-color: #ffebee;
+            color: var(--danger-color);
+            padding: 15px;
+            border-radius: 8px;
+            border-right: 5px solid var(--danger-color);
+            margin-bottom: 20px;
+            display: none;
+            animation: fadeIn 0.5s;
+        }
+
+        .grid-dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            transition: transform 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card:hover { transform: translateY(-3px); }
+        .card.gold { border-top: 5px solid var(--gold-color); }
+        .card.silver { border-top: 5px solid var(--silver-color); }
+        .card.portfolio { border-top: 5px solid var(--accent-color); grid-column: 1 / -1; }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .card-title { font-size: 1.1rem; font-weight: bold; margin: 0; }
+        .icon { font-size: 1.5rem; }
+
+        .price-display {
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--text-primary);
+            margin: 10px 0;
+        }
+
+        .stats-row {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+            font-size: 0.9rem;
+        }
+
+        .stat-item { text-align: center; }
+        .stat-label { color: var(--text-secondary); display: block; margin-bottom: 4px; }
+        .stat-value { font-weight: bold; font-size: 1.1rem; }
+        .profit-positive { color: var(--success-color); }
+        .profit-negative { color: var(--danger-color); }
+
+        .loader { text-align: center; padding: 40px; color: var(--text-secondary); }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 600px) {
+            .price-display { font-size: 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>🏆 Charisma Investment</h1>
+        <div class="subtitle">داشبورد هوشمند مانیتورینگ طلا و نقره</div>
+        <div id="last-update" class="last-update">در حال بارگذاری داده‌ها...</div>
+    </header>
+
+    <div id="alert-container" class="alert-box"></div>
+
+    <div id="loader" class="loader">
+        <p>⏳ در حال دریافت آخرین قیمت‌ها از سرور...</p>
+    </div>
+
+    <div id="dashboard" style="display: none;">
+        <div class="grid-dashboard">
+            <!-- کارت طلا -->
+            <div class="card gold">
+                <div class="card-header">
+                    <span class="card-title">طلای ۱۸ عیار (معادل)</span>
+                    <span class="icon">🥇</span>
+                </div>
+                <div class="price-display" id="gold-price">-</div>
+                <div style="color: var(--text-secondary); font-size: 0.9rem;">تومان</div>
+                <div class="stats-row">
+                    <div class="stat-item">
+                        <span class="stat-label">سود خالص</span>
+                        <span class="stat-value" id="gold-profit-percent">-%</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">ارزش کل</span>
+                        <span class="stat-value" id="gold-value">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- کارت نقره -->
+            <div class="card silver">
+                <div class="card-header">
+                    <span class="card-title">نقره</span>
+                    <span class="icon">🥈</span>
+                </div>
+                <div class="price-display" id="silver-price">-</div>
+                <div style="color: var(--text-secondary); font-size: 0.9rem;">تومان</div>
+                <div class="stats-row">
+                    <div class="stat-item">
+                        <span class="stat-label">سود خالص</span>
+                        <span class="stat-value" id="silver-profit-percent">-%</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">ارزش کل</span>
+                        <span class="stat-value" id="silver-value">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- کارت خلاصه پرتفو -->
+            <div class="card portfolio">
+                <div class="card-header">
+                    <span class="card-title">💼 خلاصه کل پرتفو</span>
+                    <span class="icon">📊</span>
+                </div>
+                <div class="grid-dashboard" style="margin-bottom: 0; gap: 10px;">
+                    <div class="stat-item">
+                        <span class="stat-label">ارزش کل دارایی</span>
+                        <span class="stat-value" id="total-value" style="font-size: 1.4rem;">-</span>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);">تومان</div>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">سود/زیان خالص (کسر ۱٪ کارمزد)</span>
+                        <span class="stat-value" id="total-profit-percent" style="font-size: 1.4rem;">-%</span>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);">درصد</div>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">مبلغ سود خالص</span>
+                        <span class="stat-value" id="total-profit-amount" style="font-size: 1.2rem;">-</span>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);">تومان</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // تزریق خودکار متغیرها توسط GitHub Actions در زمان Deploy
+    // اگر متغیرها تعریف نشده باشند، مقادیر پیش‌فرض خالی استفاده می‌شوند
+    if (typeof window.GH_USER === 'undefined') { window.GH_USER = ''; }
+    if (typeof window.GH_REPO === 'undefined') { window.GH_REPO = 'charisma-monitor'; }
+
+    const username = window.GH_USER;
+    const reponame = window.GH_REPO;
+    
+    // ساخت آدرس دینامیک
+    const DATA_URL = `https://raw.githubusercontent.com/${username}/${reponame}/main/market_data.json`;
+
+    console.log(`📡 Connecting to: ${DATA_URL}`);
+
+    async function fetchData() {
+        try {
+            const response = await fetch(`${DATA_URL}?t=${new Date().getTime()}`);
+            if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+            
+            const data = await response.json();
+            renderDashboard(data);
+        } catch (error) {
+            console.error("Fetch error:", error);
+            const statusEl = document.getElementById('last-update');
+            statusEl.innerText = "⚠️ خطا در اتصال به داده‌ها. بررسی کنید GitHub Actions اجرا شده باشد.";
+            statusEl.style.color = "#c0392b";
+        }
+    }
+
+    function renderDashboard(data) {
+        document.getElementById('loader').style.display = 'none';
+        document.getElementById('dashboard').style.display = 'block';
+
+        const dateObj = new Date(data.last_updated);
+        document.getElementById('last-update').innerText = `آخرین بروزرسانی: ${dateObj.toLocaleString('fa-IR')}`;
+        document.getElementById('last-update').style.color = "#27ae60";
+
+        // Gold
+        const gold = data.assets.gold;
+        document.getElementById('gold-price').innerText = Number(gold.price_toman).toLocaleString();
+        const goldStats = data.portfolio.details.gold;
+        const goldProfitEl = document.getElementById('gold-profit-percent');
+        goldProfitEl.innerText = `${goldStats.profit_percent > 0 ? '+' : ''}${goldStats.profit_percent}%`;
+        goldProfitEl.className = `stat-value ${goldStats.profit_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
+        document.getElementById('gold-value').innerText = Number(goldStats.total_value).toLocaleString();
+
+        // Silver
+        const silver = data.assets.silver;
+        document.getElementById('silver-price').innerText = Number(silver.price_toman).toLocaleString();
+        const silverStats = data.portfolio.details.silver;
+        const silverProfitEl = document.getElementById('silver-profit-percent');
+        silverProfitEl.innerText = `${silverStats.profit_percent > 0 ? '+' : ''}${silverStats.profit_percent}%`;
+        silverProfitEl.className = `stat-value ${silverStats.profit_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
+        document.getElementById('silver-value').innerText = Number(silverStats.total_value).toLocaleString();
+
+        // Portfolio
+        const portfolio = data.portfolio;
+        document.getElementById('total-value').innerText = Number(portfolio.total_value).toLocaleString();
+        const totalProfitPercentEl = document.getElementById('total-profit-percent');
+        totalProfitPercentEl.innerText = `${portfolio.net_profit_percent > 0 ? '+' : ''}${portfolio.net_profit_percent}%`;
+        totalProfitPercentEl.className = `stat-value ${portfolio.net_profit_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
+        document.getElementById('total-profit-amount').innerText = Number(portfolio.net_profit_amount).toLocaleString();
+
+        // Alerts
+        const alertContainer = document.getElementById('alert-container');
+        if (data.alerts && data.alerts.length > 0) {
+            alertContainer.style.display = 'block';
+            const lastAlert = data.alerts[data.alerts.length - 1];
+            alertContainer.innerHTML = `<strong>🔔 هشدار:</strong> ${lastAlert.message}`;
+        } else {
+            alertContainer.style.display = 'none';
+        }
+    }
+
+    fetchData();
+    setInterval(fetchData, 60000);
+</script>
+
+</body>
+</html>
