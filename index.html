@@ -113,6 +113,15 @@
         .profit-negative { color: var(--danger-color); }
 
         .loader { text-align: center; padding: 40px; color: var(--text-secondary); }
+        .cache-warning {
+            background-color: #fff3cd;
+            color: #856404;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 0.85rem;
+            display: none;
+        }
 
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(-10px); }
@@ -131,6 +140,9 @@
         <h1>🏆 Charisma Investment</h1>
         <div class="subtitle">داشبورد هوشمند مانیتورینگ طلا و نقره</div>
         <div id="last-update" class="last-update">در حال بارگذاری داده‌ها...</div>
+        <div id="cache-warning" class="cache-warning">
+            ⚠️ داده‌های فعلی از کش خوانده شده‌اند (API کاریزما در دسترس نیست)
+        </div>
     </header>
 
     <div id="alert-container" class="alert-box"></div>
@@ -236,21 +248,15 @@
     // ============================================
     // این اسکریپت هر 60 ثانیه (60000 میلی‌ثانیه) به صورت خودکار
     // فایل market_data.json را از سرور می‌خواند و داشبورد را آپدیت می‌کند.
-    // 
-    // روش کار:
-    // 1. fetchData() را بلافاصله پس از لود صفحه اجرا می‌کند
-    // 2. سپس با setInterval هر 60 ثانیه تکرار می‌کند
-    // 3. با اضافه کردن timestamp به URL، از کش شدن فایل جلوگیری می‌کند
-    // ============================================
-
+    
     const DATA_URL = 'market_data.json';
+    let isCachedData = false;
 
     console.log(`📡 Connecting to: ${DATA_URL}`);
     console.log(`🔄 Auto-refresh: Every 60 seconds`);
 
     async function fetchData() {
         try {
-            // افزودن timestamp برای جلوگیری از کش مرورگر
             const response = await fetch(`${DATA_URL}?t=${new Date().getTime()}`);
             
             if (!response.ok) {
@@ -268,6 +274,14 @@
         }
     }
 
+    // تابع کمکی برای نمایش ایمن اعداد (جلوگیری از NaN)
+    function safeNumber(value, defaultValue = '-') {
+        if (value === null || value === undefined || isNaN(value)) {
+            return defaultValue;
+        }
+        return Number(value).toLocaleString();
+    }
+
     function renderDashboard(data) {
         document.getElementById('loader').style.display = 'none';
         document.getElementById('dashboard').style.display = 'block';
@@ -277,18 +291,32 @@
         document.getElementById('last-update').innerText = `آخرین بروزرسانی: ${updateTime}`;
         document.getElementById('last-update').style.color = "#27ae60";
 
+        // بررسی کش بودن داده‌ها
+        const source = data.source || 'live';
+        if (source === 'cached') {
+            isCachedData = true;
+            document.getElementById('cache-warning').style.display = 'block';
+        } else {
+            isCachedData = false;
+            document.getElementById('cache-warning').style.display = 'none';
+        }
+
         // --- طلا (نمایش 24 عیار + 18 عیار) ---
         const gold = data.assets_summary?.gold;
         if (gold) {
-            // قیمت طلای 24 عیار (اصلی)
-            document.getElementById('gold-24k-price').innerText = Number(gold.price_24k_toman).toLocaleString();
+            // قیمت طلای 24 عیار (اصلی) - با جلوگیری از NaN
+            const price24k = gold.price_24k_toman !== undefined ? gold.price_24k_toman : gold.price_toman;
+            document.getElementById('gold-24k-price').innerText = safeNumber(price24k);
             
-            // قیمت طلای 18 عیار (فرعی)
-            document.getElementById('gold-18k-price').innerText = `18 عیار: ${Number(gold.price_18k_toman).toLocaleString()}`;
+            // قیمت طلای 18 عیار (فرعی) - با جلوگیری از NaN
+            const price18k = gold.price_18k_toman !== undefined ? gold.price_18k_toman : (gold.price_toman ? gold.price_toman * 0.75 : null);
+            document.getElementById('gold-18k-price').innerText = `18 عیار: ${safeNumber(price18k)}`;
             
             // تغییرات 24 ساعته
-            document.getElementById('gold-change').innerText = `${gold.daily_change_percent > 0 ? '+' : ''}${gold.daily_change_percent}%`;
-            document.getElementById('gold-change').style.color = gold.daily_change_percent >= 0 ? 'var(--success-color)' : 'var(--danger-color)';
+            if (gold.daily_change_percent !== undefined) {
+                document.getElementById('gold-change').innerText = `${gold.daily_change_percent > 0 ? '+' : ''}${gold.daily_change_percent}%`;
+                document.getElementById('gold-change').style.color = gold.daily_change_percent >= 0 ? 'var(--success-color)' : 'var(--danger-color)';
+            }
             
             // داده‌های پرتفو
             const goldPortfolio = data.portfolio?.assets?.gold;
@@ -296,38 +324,45 @@
                 const m = goldPortfolio.metrics;
                 document.getElementById('gold-profit-percent').innerText = `${m.npl_percent > 0 ? '+' : ''}${m.npl_percent}%`;
                 document.getElementById('gold-profit-percent').className = `stat-value ${m.npl_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
-                document.getElementById('gold-value').innerText = Number(m.current_value).toLocaleString();
-                document.getElementById('gold-breakeven').innerText = Number(m.break_even_price).toLocaleString();
+                document.getElementById('gold-value').innerText = safeNumber(m.current_value);
+                document.getElementById('gold-breakeven').innerText = safeNumber(m.break_even_price);
             }
+        } else {
+            // اگر داده طلا اصلاً نبود
+            document.getElementById('gold-24k-price').innerText = '-';
+            document.getElementById('gold-18k-price').innerText = '18 عیار: -';
         }
 
         // --- نقره ---
         const silver = data.assets_summary?.silver;
         if (silver) {
-            document.getElementById('silver-price').innerText = Number(silver.price_toman).toLocaleString();
-            document.getElementById('silver-change').innerText = `${silver.daily_change_percent > 0 ? '+' : ''}${silver.daily_change_percent}%`;
-            document.getElementById('silver-change').style.color = silver.daily_change_percent >= 0 ? 'var(--success-color)' : 'var(--danger-color)';
+            document.getElementById('silver-price').innerText = safeNumber(silver.price_toman);
+            
+            if (silver.daily_change_percent !== undefined) {
+                document.getElementById('silver-change').innerText = `${silver.daily_change_percent > 0 ? '+' : ''}${silver.daily_change_percent}%`;
+                document.getElementById('silver-change').style.color = silver.daily_change_percent >= 0 ? 'var(--success-color)' : 'var(--danger-color)';
+            }
             
             const silverPortfolio = data.portfolio?.assets?.silver;
             if (silverPortfolio && silverPortfolio.metrics) {
                 const m = silverPortfolio.metrics;
                 document.getElementById('silver-profit-percent').innerText = `${m.npl_percent > 0 ? '+' : ''}${m.npl_percent}%`;
                 document.getElementById('silver-profit-percent').className = `stat-value ${m.npl_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
-                document.getElementById('silver-value').innerText = Number(m.current_value).toLocaleString();
-                document.getElementById('silver-breakeven').innerText = Number(m.break_even_price).toLocaleString();
+                document.getElementById('silver-value').innerText = safeNumber(m.current_value);
+                document.getElementById('silver-breakeven').innerText = safeNumber(m.break_even_price);
             }
         }
 
         // --- پرتفو کل ---
         const portfolio = data.portfolio;
         if (portfolio && !portfolio.error && !portfolio.message) {
-            document.getElementById('total-value').innerText = Number(portfolio.total_current_value).toLocaleString();
+            document.getElementById('total-value').innerText = safeNumber(portfolio.total_current_value);
             
             const totalProfitPercentEl = document.getElementById('total-profit-percent');
             totalProfitPercentEl.innerText = `${portfolio.total_npl_percent > 0 ? '+' : ''}${portfolio.total_npl_percent}%`;
             totalProfitPercentEl.className = `stat-value ${portfolio.total_npl_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
             
-            document.getElementById('total-profit-amount').innerText = Number(portfolio.total_net_profit).toLocaleString();
+            document.getElementById('total-profit-amount').innerText = safeNumber(portfolio.total_net_profit);
         } else {
             document.getElementById('total-value').innerText = "-";
             document.getElementById('total-profit-percent').innerText = "تنظیم نشده";
