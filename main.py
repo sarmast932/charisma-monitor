@@ -1,7 +1,7 @@
 import os
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from upstash_redis import Redis
 
 # --- 1. پیکربندی و احراز هویت ---
@@ -10,199 +10,223 @@ CHAT_ID = os.getenv('CHAT_ID', '').strip()
 UPSTASH_URL = os.getenv('UPSTASH_URL', '').strip()
 UPSTASH_TOKEN = os.getenv('UPSTASH_TOKEN', '').strip()
 
-# آستانه‌های هشدار (تومان)
-GOLD_THRESHOLD = 3500000
-SILVER_THRESHOLD = 45000
+# آستانه‌های هشدار قیمت (تومان) - پیش‌فرض (اگر در Variables نباشد)
+GOLD_PRICE_THRESHOLD = float(os.getenv('GOLD_PRICE_THRESHOLD', 20000000))
+SILVER_PRICE_THRESHOLD = float(os.getenv('SILVER_PRICE_THRESHOLD', 600000))
 
-# --- ⚠️ منشأ داده‌های پرتفو: این مقادیر را با خریدهای واقعی خود جایگزین کنید ---
-# این اعداد تخیلی نیستند، بلکه میانگین قیمت خرید شما هستند که باید دستی وارد کنید
-PORTFOLIO = {
-    "gold_buy_avg": 3200000,   # 👈 میانگین قیمت خرید طلای شما (تومان)
-    "gold_qty": 10,            # 👈 تعداد گرم/واحد طلای خریداری شده
-    "silver_buy_avg": 40000,   # 👈 میانگین قیمت خرید نقره شما (تومان)
-    "silver_qty": 100          # 👈 تعداد گرم/واحد نقره خریداری شده
-}
+# آستانه هشدار درصد سود/زیان پرتفو (مثلاً اگر سود > 20% یا زیان < -10%)
+PORTFOLIO_PROFIT_THRESHOLD = float(os.getenv('PORTFOLIO_PROFIT_THRESHOLD', 20.0))
+PORTFOLIO_LOSS_THRESHOLD = float(os.getenv('PORTFOLIO_LOSS_THRESHOLD', -10.0))
+
+# --- 2. ورودی‌های پرتفو (دیگر نیازی به ویرایش کد نیست!) ---
+# این مقادیر را در GitHub Secrets یا Variables با نام‌های مشخص شده وارد کنید.
+# اگر وارد نکنید، مقادیر پیش‌فرض زیر استفاده می‌شوند (که احتمالاً غلط هستند).
+try:
+    PF_GOLD_QTY = float(os.getenv('PF_GOLD_QTY', 0))
+    PF_GOLD_AVG = float(os.getenv('PF_GOLD_AVG', 0))
+    PF_SILVER_QTY = float(os.getenv('PF_SILVER_QTY', 0))
+    PF_SILVER_AVG = float(os.getenv('PF_SILVER_AVG', 0))
+except ValueError:
+    PF_GOLD_QTY, PF_GOLD_AVG, PF_SILVER_QTY, PF_SILVER_AVG = 0, 0, 0, 0
 
 # اتصال به Redis
 redis_client = None
 try:
-    if not UPSTASH_URL or not UPSTASH_TOKEN:
-        raise ValueError("Upstash credentials are empty")
-    redis_client = Redis(url=UPSTASH_URL, token=UPSTASH_TOKEN)
-    # تست اتصال با یک دستور ساده
-    redis_client.ping()
-    print("✅ Connected to Upstash Redis successfully")
+    if UPSTASH_URL and UPSTASH_TOKEN:
+        redis_client = Redis(url=UPSTASH_URL, token=UPSTASH_TOKEN)
+        redis_client.ping()
+        print("✅ Connected to Upstash Redis")
 except Exception as e:
     print(f"❌ Redis Connection Failed: {e}")
-    redis_client = None
 
-# --- 2. توابع ---
+# --- توابع کمکی ---
+
+def get_tehran_time():
+    """دریافت زمان فعلی به وقت تهران"""
+    utc_now = datetime.utcnow()
+    return utc_now + timedelta(hours=3, minutes=30)
 
 def send_telegram_alert(message):
     if not BOT_TOKEN or not CHAT_ID:
-        print("⚠️ Telegram credentials missing")
         return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
         resp = requests.post(url, json=payload, timeout=10)
-        print(f"📩 Telegram Response: {resp.status_code}")
-    except Exception as e:
-        print(f"⚠️ Telegram Error: {e}")
+        if resp.status_code == 200:
+            print("📩 Alert sent.")
+    except:
+        pass
 
-def fetch_price_from_charisma(asset_name):
-    """
-    استخراج قیمت از فیلد دقیق: data.latestIndexPrice.index
-    """
+def fetch_asset_data(asset_name):
+    """دریافت قیمت و تغییرات روزانه از API کاریزما"""
     url = f"https://inv.charisma.ir/pub/Plans/{asset_name}"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-        'Referer': 'https://inv.charisma.ir/'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
     
     try:
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        raw_json = response.json()
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json().get('data', {})
         
-        if not isinstance(raw_json, dict) or 'data' not in raw_json:
-            print(f"❌ No 'data' key in response for {asset_name}")
-            return None
-        
-        data = raw_json['data']
+        # استخراج قیمت لحظه‌ای
         price_rial = 0
+        daily_change_percent = 0.0
         
-        # استخراج از latestIndexPrice.index (قیمت لحظه‌ای)
-        if 'latestIndexPrice' in data and isinstance(data['latestIndexPrice'], dict):
-            if 'index' in data['latestIndexPrice']:
-                price_rial = float(data['latestIndexPrice']['index'])
-                print(f"✅ [{asset_name}] Found price in latestIndexPrice.index: {price_rial} Rial")
-        
-        # fallback: استفاده از prevIndexPrice اگر latest موجود نبود
-        if price_rial == 0 and 'prevIndexPrice' in data:
-            if 'index' in data['prevIndexPrice']:
-                price_rial = float(data['prevIndexPrice']['index'])
-                print(f"⚠️ [{asset_name}] Using prevIndexPrice.index: {price_rial} Rial")
-        
+        if 'latestIndexPrice' in data:
+            price_rial = float(data['latestIndexPrice'].get('index', 0))
+            # استخراج درصد تغییرات (فیلد value معمولاً درصد تغییر است)
+            # اگر عدد اعشاری کوچک بود (مثل 0.001)، ضربدر 100 می‌کنیم تا درصد شود
+            raw_change = float(data['latestIndexPrice'].get('value', 0))
+            if abs(raw_change) < 10: 
+                daily_change_percent = raw_change * 100
+            else:
+                daily_change_percent = raw_change
+                
         if price_rial == 0:
-            print(f"❌ CRITICAL: No price found for {asset_name}")
-            print(f"Available keys: {list(data.keys())}")
+            print(f"⚠️ No price found for {asset_name}")
             return None
-        
-        return price_rial
-
+            
+        return {
+            "price_rial": price_rial,
+            "daily_change": daily_change_percent
+        }
     except Exception as e:
         print(f"❌ Error fetching {asset_name}: {e}")
         return None
 
-def calculate_stats(current_price, buy_avg, qty):
-    """محاسبه سود و زیان بر اساس قیمت خرید ورودی"""
-    total_value = current_price * qty
+def calculate_metrics(current_price, buy_avg, qty, asset_name):
+    """محاسبه دقیق سود، زیان، کارمزد و نقطه سر‌به‌سر"""
+    if qty == 0 or buy_avg == 0:
+        return None
+        
+    current_value = current_price * qty
     total_cost = buy_avg * qty
-    net_profit = (total_value - total_cost) - (total_value * 0.01)  # کسر 1% کارمزد
-    percent = (net_profit / total_cost) * 100 if total_cost > 0 else 0
+    
+    # کارمزد فروش 1% از ارزش فعلی
+    fee = current_value * 0.01
+    net_value = current_value - fee
+    
+    net_profit = net_value - total_cost
+    npl_percent = (net_profit / total_cost) * 100 if total_cost > 0 else 0
+    
+    # نقطه سر‌به‌سر: قیمتی که در آن (قیمت * تعداد) - 1% کارمزد = هزینه کل
+    # P * Q * 0.99 = Total_Cost  =>  P = Total_Cost / (Q * 0.99)
+    break_even_price = total_cost / (qty * 0.99)
+    
     return {
-        "total_value": round(total_value, 2),
+        "current_value": round(current_value, 2),
         "net_profit": round(net_profit, 2),
-        "profit_percent": round(percent, 2)
+        "npl_percent": round(npl_percent, 2),
+        "break_even_price": round(break_even_price, 2),
+        "fee_amount": round(fee, 2)
     }
 
-# --- 3. منطق اصلی ---
+# --- منطق اصلی ---
 
 def main():
-    print("🚀 Starting Charisma Metals Monitor...")
-    timestamp = datetime.now().isoformat()
+    print("🚀 Starting Charisma Advanced Monitor...")
+    timestamp = get_tehran_time().isoformat()
+    tehran_time_str = get_tehran_time().strftime("%Y/%m/%d, %H:%M:%S")
     
-    use_cache = False
-    gold_toman = 0
-    silver_toman = 0
-
-    # دریافت قیمت‌ها از API
-    gold_rial = fetch_price_from_charisma("Gold")
-    silver_rial = fetch_price_from_charisma("Silver")
-
-    # بررسی اعتبار قیمت‌های دریافتی
-    # اگر قیمت طلا کمتر از 100,000 تومان بود، یعنی اشتباه است (قیمت واقعی چند میلیون است)
-    min_valid_gold_toman = 1000000  # حداقل قیمت منطقی برای طلا
-    min_valid_silver_toman = 10000  # حداقل قیمت منطقی برای نقره
-    
-    prices_valid = False
-    if gold_rial and silver_rial:
-        test_gold = (gold_rial / 10.0) * 0.75
-        test_silver = silver_rial / 10.0
-        if test_gold > min_valid_gold_toman and test_silver > min_valid_silver_toman:
-            prices_valid = True
-            print(f"✅ Prices validated: Gold={test_gold:,.0f}, Silver={test_silver:,.0f}")
-        else:
-            print(f"⚠️ Prices seem invalid (too low): Gold={test_gold:,.0f}, Silver={test_silver:,.0f}")
-
-    if not prices_valid:
-        print("⚠️ Live fetch failed or invalid. Trying cache...")
-        if redis_client:
-            cached = redis_client.get("latest_market_data")
-            if cached:
-                d = json.loads(cached)
-                gold_toman = d['assets']['gold']['price_toman']
-                silver_toman = d['assets']['silver']['price_toman']
-                use_cache = True
-                print("✅ Using cached data.")
-            else:
-                print("❌ No cache available. Exiting.")
-                return
-        else:
-            print("❌ Redis not available. Exiting.")
-            return
-    
-    if not use_cache:
-        # تبدیل ریال به تومان
-        gold_toman = (gold_rial / 10.0) * 0.75  # ضریب 0.75 برای معادل 18 عیار
-        silver_toman = silver_rial / 10.0
-        print(f"💰 [LIVE] Gold: {gold_toman:,.0f} Toman | Silver: {silver_toman:,.0f} Toman")
-    else:
-        print(f"💰 [CACHE] Gold: {gold_toman:,.0f} Toman | Silver: {silver_toman:,.0f} Toman")
-
-    # محاسبات پرتفو (بر اساس ورودی‌های PORTFOLIO در بالای کد)
-    gold_stats = calculate_stats(gold_toman, PORTFOLIO["gold_buy_avg"], PORTFOLIO["gold_qty"])
-    silver_stats = calculate_stats(silver_toman, PORTFOLIO["silver_buy_avg"], PORTFOLIO["silver_qty"])
-    
-    total_val = gold_stats["total_value"] + silver_stats["total_value"]
-    total_profit = gold_stats["net_profit"] + silver_stats["net_profit"]
-    total_invest = (PORTFOLIO["gold_buy_avg"] * PORTFOLIO["gold_qty"]) + (PORTFOLIO["silver_buy_avg"] * PORTFOLIO["silver_qty"])
-    total_percent = (total_profit / total_invest) * 100 if total_invest > 0 else 0
-
-    print(f"📊 Portfolio: Total Value={total_val:,.0f}, Profit={total_percent:.2f}%")
-
-    # هشدارها (فقط در حالت زنده)
     alerts = []
-    if not use_cache:
-        if gold_toman >= GOLD_THRESHOLD:
-            msg = f"🔔 **هشدار طلا**: {gold_toman:,.0f} تومان"
-            send_telegram_alert(msg)
-            alerts.append({"asset": "gold", "message": msg})
-        if silver_toman >= SILVER_THRESHOLD:
-            msg = f"🔔 **هشدار نقره**: {silver_toman:,.0f} تومان"
-            send_telegram_alert(msg)
-            alerts.append({"asset": "silver", "message": msg})
+    
+    # 1. دریافت داده‌های بازار
+    gold_data = fetch_asset_data("Gold")
+    silver_data = fetch_asset_data("Silver")
+    
+    if not gold_data or not silver_data:
+        print("⛔ Failed to fetch live data. Exiting.")
+        return
 
+    # تبدیل به تومان و اعمال ضریب (طلا: تقسیم بر 10 و ضربدر 0.75 برای معادل 18 عیار)
+    # نکته: اگر API مستقیماً قیمت طرح را می‌دهد، شاید ضریب 0.75 نیاز نباشد.
+    # اما طبق فرمول قبلی شما عمل می‌کنیم.
+    gold_price_toman = (gold_data['price_rial'] / 10.0) * 0.75
+    silver_price_toman = silver_data['price_rial'] / 10.0
+    
+    gold_change = gold_data['daily_change']
+    silver_change = silver_data['daily_change']
+
+    print(f"💰 Gold: {gold_price_toman:,.0f} T ({gold_change:.2f}%) | Silver: {silver_price_toman:,.0f} T ({silver_change:.2f}%)")
+
+    # 2. بررسی هشدارهای قیمت
+    if gold_price_toman >= GOLD_PRICE_THRESHOLD:
+        msg = f"🔔 **هشدار قیمت طلا**: عبور از سقف {GOLD_PRICE_THRESHOLD:,.0f}\nقیمت فعلی: {gold_price_toman:,.0f} تومان"
+        send_telegram_alert(msg)
+        alerts.append({"type": "price_high", "asset": "gold", "message": msg})
+    
+    if silver_price_toman >= SILVER_PRICE_THRESHOLD:
+        msg = f"🔔 **هشدار قیمت نقره**: عبور از سقف {SILVER_PRICE_THRESHOLD:,.0f}\nقیمت فعلی: {silver_price_toman:,.0f} تومان"
+        send_telegram_alert(msg)
+        alerts.append({"type": "price_high", "asset": "silver", "message": msg})
+
+    # 3. محاسبات پرتفو (فقط اگر مقادیر ورودی وجود داشته باشد)
+    portfolio_summary = {}
+    if PF_GOLD_QTY > 0 and PF_SILVER_QTY > 0:
+        gold_metrics = calculate_metrics(gold_price_toman, PF_GOLD_AVG, PF_GOLD_QTY, "Gold")
+        silver_metrics = calculate_metrics(silver_price_toman, PF_SILVER_AVG, PF_SILVER_QTY, "Silver")
+        
+        total_invested = (PF_GOLD_AVG * PF_GOLD_QTY) + (PF_SILVER_AVG * PF_SILVER_QTY)
+        total_current_val = gold_metrics['current_value'] + silver_metrics['current_value']
+        total_net_profit = gold_metrics['net_profit'] + silver_metrics['net_profit']
+        total_npl_percent = (total_net_profit / total_invested) * 100 if total_invested > 0 else 0
+        
+        portfolio_summary = {
+            "total_invested": round(total_invested, 2),
+            "total_current_value": round(total_current_val, 2),
+            "total_net_profit": round(total_net_profit, 2),
+            "total_npl_percent": round(total_npl_percent, 2),
+            "assets": {
+                "gold": {
+                    "qty": PF_GOLD_QTY,
+                    "buy_avg": PF_GOLD_AVG,
+                    "current_price": gold_price_toman,
+                    "daily_change_percent": round(gold_change, 2),
+                    "metrics": gold_metrics
+                },
+                "silver": {
+                    "qty": PF_SILVER_QTY,
+                    "buy_avg": PF_SILVER_AVG,
+                    "current_price": silver_price_toman,
+                    "daily_change_percent": round(silver_change, 2),
+                    "metrics": silver_metrics
+                }
+            }
+        }
+        
+        print(f"📊 Portfolio NPL: {total_npl_percent:.2f}% (Profit: {total_net_profit:,.0f})")
+
+        # 4. بررسی هشدارهای درصد سود/زیان
+        if total_npl_percent >= PORTFOLIO_PROFIT_THRESHOLD:
+            msg = f"🎉 **هشدار سود پرتفو**: سود شما به **{total_npl_percent:.2f}%** رسید!\n(آستانه: {PORTFOLIO_PROFIT_THRESHOLD}%)"
+            send_telegram_alert(msg)
+            alerts.append({"type": "profit_target", "message": msg})
+        
+        elif total_npl_percent <= PORTFOLIO_LOSS_THRESHOLD:
+            msg = f"📉 **هشدار زیان پرتفو**: زیان شما به **{total_npl_percent:.2f}%** رسید.\n(آستانه: {PORTFOLIO_LOSS_THRESHOLD}%)"
+            send_telegram_alert(msg)
+            alerts.append({"type": "loss_limit", "message": msg})
+            
+    else:
+        print("⚠️ Portfolio inputs missing. Set PF_GOLD_QTY, etc. in GitHub Variables.")
+        portfolio_summary = {"error": "Missing portfolio inputs"}
+
+    # 5. ساخت خروجی نهایی JSON
     final_payload = {
-        "last_updated": timestamp,
-        "source": "cached" if use_cache else "live",
-        "assets": {
-            "gold": {"price_toman": round(gold_toman, 2)},
-            "silver": {"price_toman": round(silver_toman, 2)}
-        },
-        "portfolio": {
-            "total_value": round(total_val, 2),
-            "net_profit_percent": round(total_percent, 2),
-            "details": {"gold": gold_stats, "silver": silver_stats},
-            "input_info": {
-                "gold_buy_avg": PORTFOLIO["gold_buy_avg"],
-                "gold_qty": PORTFOLIO["gold_qty"],
-                "silver_buy_avg": PORTFOLIO["silver_buy_avg"],
-                "silver_qty": PORTFOLIO["silver_qty"]
+        "last_updated_fa": tehran_time_str,
+        "last_updated_iso": timestamp,
+        "market_status": "open",
+        "assets_summary": {
+            "gold": {
+                "price_toman": round(gold_price_toman, 2),
+                "daily_change_percent": round(gold_change, 2)
+            },
+            "silver": {
+                "price_toman": round(silver_price_toman, 2),
+                "daily_change_percent": round(silver_change, 2)
             }
         },
+        "portfolio": portfolio_summary,
         "alerts": alerts
     }
 
@@ -210,18 +234,24 @@ def main():
     if redis_client:
         try:
             redis_client.set("latest_market_data", json.dumps(final_payload))
-            if not use_cache:
-                redis_client.lpush("market_history", json.dumps({"time": timestamp, "gold": gold_toman, "silver": silver_toman}))
-                redis_client.ltrim("market_history", 0, 49)
-            print("💾 Saved to Redis.")
+            # افزودن به تاریخچه برای نمودار آینده
+            history_item = {
+                "time": timestamp,
+                "gold": gold_price_toman,
+                "silver": silver_price_toman,
+                "npl": portfolio_summary.get("total_npl_percent", 0)
+            }
+            redis_client.lpush("market_history", json.dumps(history_item))
+            redis_client.ltrim("market_history", 0, 99) # نگهداری 100 رکورد آخر
+            print("💾 Data & History saved to Redis.")
         except Exception as e:
-            print(f"❌ Redis Save Error: {e}")
+            print(f"❌ Redis Error: {e}")
 
-    # تولید JSON
+    # تولید فایل JSON
     with open("market_data.json", "w", encoding="utf-8") as f:
         json.dump(final_payload, f, ensure_ascii=False, indent=2)
-    print("📄 market_data.json generated.")
-    print("✅ Execution completed.")
+    
+    print("✅ Execution completed successfully.")
 
 if __name__ == "__main__":
     main()
