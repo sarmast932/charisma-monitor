@@ -15,25 +15,25 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # 1. دریافت کدهای پروژه از مخزن
+      # 1. دریافت کدها
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 2. تنظیم محیط پایتون
+      # 2. تنظیم پایتون
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 3. نصب کتابخانه‌های مورد نیاز (شامل Upstash Redis)
+      # 3. نصب کتابخانه‌ها
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests upstash_redis
 
-      # 4. اجرای اسکریپت اصلی (دریافت قیمت، ذخیره در ردیس، تولید JSON)
+      # 4. اجرای اسکریپت اصلی
       - name: Run Price Scraper
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
@@ -44,23 +44,34 @@ jobs:
           SILVER_THRESHOLD: 45000
         run: python main.py
 
-      # 5. تزریق خودکار نام کاربری و نام مخزن به فایل HTML
+      # 5. اطمینان از وجود فایل JSON (مرحله حیاتی برای رفع خطای 404)
+      - name: Ensure JSON exists
+        run: |
+          if [ ! -f market_data.json ]; then
+            echo "Error: market_data.json was not created by the script!"
+            exit 1
+          else
+            echo "Success: market_data.json found. Size: $(wc -c < market_data.json) bytes"
+            cat market_data.json
+          fi
+
+      # 6. تزریق نام کاربری به HTML
       - name: Inject GitHub Info into HTML
         run: |
           sed -i "s/window.GH_USER = ''/window.GH_USER = '${{ github.repository_owner }}'/g" index.html
           sed -i "s/window.GH_REPO = 'charisma-monitor'/window.GH_REPO = '${{ github.event.repository.name }}'/g" index.html
 
-      # 6. پیکربندی GitHub Pages
+      # 7. پیکربندی Pages
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      # 7. آپلود فایل‌ها به عنوان Artifact (شامل index.html و market_data.json تولید شده)
+      # 8. آپلود فایل‌ها (حالا مطمئنیم که JSON وجود دارد)
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
 
-      # 8. انتشار نهایی سایت روی GitHub Pages
+      # 9. انتشار سایت
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
