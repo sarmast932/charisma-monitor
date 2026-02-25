@@ -15,44 +15,52 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      # 1. دریافت کدهای پروژه از مخزن
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # 2. تنظیم محیط پایتون
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
+      # 3. نصب کتابخانه‌های مورد نیاز (شامل Upstash Redis)
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install requests upstash_redis
 
+      # 4. اجرای اسکریپت اصلی (دریافت قیمت، ذخیره در ردیس، تولید JSON)
       - name: Run Price Scraper
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GOLD_THRESHOLD: ${{ vars.GOLD_THRESHOLD }}
-          SILVER_THRESHOLD: ${{ vars.SILVER_THRESHOLD }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          UPSTASH_URL: ${{ secrets.UPSTASH_URL }}
+          UPSTASH_TOKEN: ${{ secrets.UPSTASH_TOKEN }}
+          GOLD_THRESHOLD: 3500000
+          SILVER_THRESHOLD: 45000
         run: python main.py
 
+      # 5. تزریق خودکار نام کاربری و نام مخزن به فایل HTML
       - name: Inject GitHub Info into HTML
         run: |
           sed -i "s/window.GH_USER = ''/window.GH_USER = '${{ github.repository_owner }}'/g" index.html
           sed -i "s/window.GH_REPO = 'charisma-monitor'/window.GH_REPO = '${{ github.event.repository.name }}'/g" index.html
 
+      # 6. پیکربندی GitHub Pages
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      # 7. آپلود فایل‌ها به عنوان Artifact (شامل index.html و market_data.json تولید شده)
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
 
+      # 8. انتشار نهایی سایت روی GitHub Pages
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-      
-      # مرحله Commit and Push حذف شد تا از خطای 128 جلوگیری شود و فایل JSON مستقیماً در آرتیفکت دیپلوی شود.
