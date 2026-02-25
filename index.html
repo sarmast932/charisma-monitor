@@ -145,12 +145,22 @@
                 <div style="color: var(--text-secondary); font-size: 0.9rem;">تومان</div>
                 <div class="stats-row">
                     <div class="stat-item">
+                        <span class="stat-label">تغییرات ۲۴ ساعته</span>
+                        <span class="stat-value" id="gold-change">-%</span>
+                    </div>
+                    <div class="stat-item">
                         <span class="stat-label">سود خالص</span>
                         <span class="stat-value" id="gold-profit-percent">-%</span>
                     </div>
+                </div>
+                <div class="stats-row">
                     <div class="stat-item">
                         <span class="stat-label">ارزش کل</span>
                         <span class="stat-value" id="gold-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">نقطه سر‌به‌سر</span>
+                        <span class="stat-value" id="gold-breakeven">-</span>
                     </div>
                 </div>
             </div>
@@ -165,12 +175,22 @@
                 <div style="color: var(--text-secondary); font-size: 0.9rem;">تومان</div>
                 <div class="stats-row">
                     <div class="stat-item">
+                        <span class="stat-label">تغییرات ۲۴ ساعته</span>
+                        <span class="stat-value" id="silver-change">-%</span>
+                    </div>
+                    <div class="stat-item">
                         <span class="stat-label">سود خالص</span>
                         <span class="stat-value" id="silver-profit-percent">-%</span>
                     </div>
+                </div>
+                <div class="stats-row">
                     <div class="stat-item">
                         <span class="stat-label">ارزش کل</span>
                         <span class="stat-value" id="silver-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">نقطه سر‌به‌سر</span>
+                        <span class="stat-value" id="silver-breakeven">-</span>
                     </div>
                 </div>
             </div>
@@ -204,15 +224,13 @@
 </div>
 
 <script>
-    // --- اصلاحیه حیاتی ---
-    // استفاده از آدرس نسبی برای خواندن فایل JSON از کنار فایل HTML در GitHub Pages
-    const DATA_URL = 'market_data.json'; 
+    // خواندن فایل JSON از همان پوشه (GitHub Pages)
+    const DATA_URL = 'market_data.json';
 
     console.log(`📡 Connecting to: ${DATA_URL}`);
 
     async function fetchData() {
         try {
-            // افزودن timestamp برای جلوگیری از کش شدن
             const response = await fetch(`${DATA_URL}?t=${new Date().getTime()}`);
             
             if (!response.ok) {
@@ -233,48 +251,75 @@
         document.getElementById('loader').style.display = 'none';
         document.getElementById('dashboard').style.display = 'block';
 
-        const dateObj = new Date(data.last_updated);
-        document.getElementById('last-update').innerText = `آخرین بروزرسانی: ${dateObj.toLocaleString('fa-IR')}`;
+        // بروزرسانی زمان
+        const updateTime = data.last_updated_fa || data.last_updated_iso;
+        document.getElementById('last-update').innerText = `آخرین بروزرسانی: ${updateTime}`;
         document.getElementById('last-update').style.color = "#27ae60";
 
-        // Gold
-        const gold = data.assets.gold;
-        document.getElementById('gold-price').innerText = Number(gold.price_toman).toLocaleString();
-        const goldStats = data.portfolio.details.gold;
-        const goldProfitEl = document.getElementById('gold-profit-percent');
-        goldProfitEl.innerText = `${goldStats.profit_percent > 0 ? '+' : ''}${goldStats.profit_percent}%`;
-        goldProfitEl.className = `stat-value ${goldStats.profit_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
-        document.getElementById('gold-value').innerText = Number(goldStats.total_value).toLocaleString();
+        // --- طلا (تطبیق با ساختار assets_summary از پایتون) ---
+        const gold = data.assets_summary?.gold;
+        if (gold) {
+            document.getElementById('gold-price').innerText = Number(gold.price_toman).toLocaleString();
+            document.getElementById('gold-change').innerText = `${gold.daily_change_percent > 0 ? '+' : ''}${gold.daily_change_percent}%`;
+            document.getElementById('gold-change').style.color = gold.daily_change_percent >= 0 ? 'var(--success-color)' : 'var(--danger-color)';
+            
+            const goldPortfolio = data.portfolio?.assets?.gold;
+            if (goldPortfolio && goldPortfolio.metrics) {
+                const m = goldPortfolio.metrics;
+                document.getElementById('gold-profit-percent').innerText = `${m.npl_percent > 0 ? '+' : ''}${m.npl_percent}%`;
+                document.getElementById('gold-profit-percent').className = `stat-value ${m.npl_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
+                document.getElementById('gold-value').innerText = Number(m.current_value).toLocaleString();
+                document.getElementById('gold-breakeven').innerText = Number(m.break_even_price).toLocaleString();
+            }
+        }
 
-        // Silver
-        const silver = data.assets.silver;
-        document.getElementById('silver-price').innerText = Number(silver.price_toman).toLocaleString();
-        const silverStats = data.portfolio.details.silver;
-        const silverProfitEl = document.getElementById('silver-profit-percent');
-        silverProfitEl.innerText = `${silverStats.profit_percent > 0 ? '+' : ''}${silverStats.profit_percent}%`;
-        silverProfitEl.className = `stat-value ${silverStats.profit_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
-        document.getElementById('silver-value').innerText = Number(silverStats.total_value).toLocaleString();
+        // --- نقره ---
+        const silver = data.assets_summary?.silver;
+        if (silver) {
+            document.getElementById('silver-price').innerText = Number(silver.price_toman).toLocaleString();
+            document.getElementById('silver-change').innerText = `${silver.daily_change_percent > 0 ? '+' : ''}${silver.daily_change_percent}%`;
+            document.getElementById('silver-change').style.color = silver.daily_change_percent >= 0 ? 'var(--success-color)' : 'var(--danger-color)';
+            
+            const silverPortfolio = data.portfolio?.assets?.silver;
+            if (silverPortfolio && silverPortfolio.metrics) {
+                const m = silverPortfolio.metrics;
+                document.getElementById('silver-profit-percent').innerText = `${m.npl_percent > 0 ? '+' : ''}${m.npl_percent}%`;
+                document.getElementById('silver-profit-percent').className = `stat-value ${m.npl_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
+                document.getElementById('silver-value').innerText = Number(m.current_value).toLocaleString();
+                document.getElementById('silver-breakeven').innerText = Number(m.break_even_price).toLocaleString();
+            }
+        }
 
-        // Portfolio
+        // --- پرتفو کل ---
         const portfolio = data.portfolio;
-        document.getElementById('total-value').innerText = Number(portfolio.total_value).toLocaleString();
-        const totalProfitPercentEl = document.getElementById('total-profit-percent');
-        totalProfitPercentEl.innerText = `${portfolio.net_profit_percent > 0 ? '+' : ''}${portfolio.net_profit_percent}%`;
-        totalProfitPercentEl.className = `stat-value ${portfolio.net_profit_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
-        document.getElementById('total-profit-amount').innerText = Number(portfolio.net_profit_amount).toLocaleString();
+        if (portfolio && !portfolio.error && !portfolio.message) {
+            document.getElementById('total-value').innerText = Number(portfolio.total_current_value).toLocaleString();
+            
+            const totalProfitPercentEl = document.getElementById('total-profit-percent');
+            totalProfitPercentEl.innerText = `${portfolio.total_npl_percent > 0 ? '+' : ''}${portfolio.total_npl_percent}%`;
+            totalProfitPercentEl.className = `stat-value ${portfolio.total_npl_percent >= 0 ? 'profit-positive' : 'profit-negative'}`;
+            
+            document.getElementById('total-profit-amount').innerText = Number(portfolio.total_net_profit).toLocaleString();
+        } else {
+            document.getElementById('total-value').innerText = "-";
+            document.getElementById('total-profit-percent').innerText = "تنظیم نشده";
+            document.getElementById('total-profit-amount').innerText = "-";
+        }
 
-        // Alerts
+        // --- هشدارها ---
         const alertContainer = document.getElementById('alert-container');
         if (data.alerts && data.alerts.length > 0) {
             alertContainer.style.display = 'block';
             const lastAlert = data.alerts[data.alerts.length - 1];
-            alertContainer.innerHTML = `<strong>🔔 هشدار:</strong> ${lastAlert.message}`;
+            alertContainer.innerHTML = `<strong>🔔 هشدار:</strong> ${lastAlert.message.replace(/\*\*/g, '')}`;
         } else {
             alertContainer.style.display = 'none';
         }
     }
 
+    // اجرای اولیه
     fetchData();
+    // بروزرسانی خودکار هر ۶۰ ثانیه
     setInterval(fetchData, 60000);
 </script>
 
