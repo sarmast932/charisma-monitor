@@ -2,27 +2,35 @@ name: Update Market Data & Deploy Site
 
 on:
   schedule:
+    # اجرا هر 5 دقیقه
     - cron: '*/5 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: # امکان اجرای دستی
 
 jobs:
   process-and-deploy:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout
+      # 1. دریافت کدها
+      - name: Checkout Repository
         uses: actions/checkout@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # 2. تنظیم پایتون
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
+      # 3. نصب کتابخانه‌ها
       - name: Install Dependencies
-        run: pip install requests
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
 
-      - name: Run Scraper
+      # 4. اجرای اسکریپت اصلی
+      - name: Run Price Scraper
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -30,25 +38,31 @@ jobs:
           SILVER_THRESHOLD: ${{ vars.SILVER_THRESHOLD }}
         run: python main.py
 
-      - name: Inject GitHub Info
+      # 5. تزریق خودکار نام کاربری به HTML
+      - name: Inject GitHub Info into HTML
         run: |
           sed -i "s/window.GH_USER = ''/window.GH_USER = '${{ github.repository_owner }}'/g" index.html
           sed -i "s/window.GH_REPO = 'charisma-monitor'/window.GH_REPO = '${{ github.event.repository.name }}'/g" index.html
 
-      - name: Configure Pages
+      # 6. تنظیمات Pages
+      - name: Configure GitHub Pages
         uses: actions/configure-pages@v3
 
-      - name: Upload Artifact
-        uses: actions/upload-pages-artifact@v2
+      # 7. آپلود فایل‌ها (اصلاح شده به v4)
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
 
+      # 8. انتشار سایت (اصلاح شده به v3 برای هماهنگی)
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v2
+        id: deployment
+        uses: actions/deploy-pages@v4
 
-      - name: Commit Data
+      # 9. ذخیره داده‌ها در مخزن
+      - name: Commit and Push Data
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add market_data.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update data" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: Market Data Refresh" && git push)
