@@ -1,0 +1,54 @@
+name: Update Market Data & Deploy Site
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  process-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Run Scraper
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOLD_THRESHOLD: ${{ vars.GOLD_THRESHOLD }}
+          SILVER_THRESHOLD: ${{ vars.SILVER_THRESHOLD }}
+        run: python main.py
+
+      - name: Inject GitHub Info
+        run: |
+          sed -i "s/window.GH_USER = ''/window.GH_USER = '${{ github.repository_owner }}'/g" index.html
+          sed -i "s/window.GH_REPO = 'charisma-monitor'/window.GH_REPO = '${{ github.event.repository.name }}'/g" index.html
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v3
+
+      - name: Upload Artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v2
+
+      - name: Commit Data
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add market_data.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update data" && git push)
