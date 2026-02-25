@@ -4,18 +4,15 @@ import requests
 from datetime import datetime
 from upstash_redis import Redis
 
-# --- 1. پیکربندی و اتصال به دیتابیس ---
-# دریافت متغیرها از GitHub Secrets
+# --- 1. پیکربندی ---
 bot_token = os.getenv('BOT_TOKEN')
 chat_id = os.getenv('CHAT_ID')
 upstash_url = os.getenv('UPSTASH_URL')
 upstash_token = os.getenv('UPSTASH_TOKEN')
 
-# تنظیمات آستانه قیمت (می‌توانید این اعداد را تغییر دهید)
-GOLD_THRESHOLD = 3500000  # مثال: 3,500,000 تومان
-SILVER_THRESHOLD = 45000  # مثال: 45,000 تومان
+GOLD_THRESHOLD = 3500000
+SILVER_THRESHOLD = 45000
 
-# اطلاعات پرتفوی نمونه (قابل تغییر)
 PORTFOLIO = {
     "gold_buy_avg": 3200000,
     "gold_qty": 10,
@@ -23,7 +20,7 @@ PORTFOLIO = {
     "silver_qty": 100
 }
 
-# اتصال به Upstash Redis
+# اتصال به Redis
 try:
     redis = Redis(url=upstash_url, token=upstash_token)
     print("✅ Connected to Upstash Redis")
@@ -31,70 +28,91 @@ except Exception as e:
     print(f"❌ Redis Connection Failed: {e}")
     redis = None
 
-# --- 2. توابع کمکی ---
+# --- 2. توابع کمکی با منطق قوی‌تر ---
 
 def send_telegram_alert(message):
-    """ارسال پیام هشدار به تلگرام"""
     if not bot_token or not chat_id:
-        print("⚠️ Telegram credentials missing.")
         return
-    
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
+    payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200:
-            print("📩 Alert sent to Telegram.")
-        else:
-            print(f"⚠️ Telegram API Error: {response.text}")
-    except Exception as e:
-        print(f"❌ Failed to send Telegram alert: {e}")
+        requests.post(url, json=payload, timeout=10)
+    except:
+        pass
 
 def fetch_charisma_price(plan_type):
-    """دریافت قیمت از API کاریزما"""
+    """دریافت قیمت با هدرهای پیشرفته برای دور زدن محدودیت‌ها"""
     url = f"https://inv.charisma.ir/pub/Plans/{plan_type}"
+    
+    # هدرهایی که درخواست را شبیه مرورگر واقعی می‌کند
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8',
+        'Referer': 'https://inv.charisma.ir/',
+        'Connection': 'keep-alive'
+    }
+    
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         data = response.json()
         
-        # استخراج هوشمند قیمت از ساختار JSON
+        print(f"📥 Raw Data for {plan_type}: {str(data)[:200]}...") # چاپ بخشی از داده برای دیباگ
+        
         price_rial = 0
+        
+        # استراتژی 1: جستجوی کلیدهای معروف
         if isinstance(data, dict):
-            # جستجو در کلیدهای احتمالی
-            for key in ['Price', 'LastPrice', 'Value', 'CurrentPrice']:
-                if key in data and isinstance(data[key], (int, float)):
-                    price_rial = float(data[key])
-                    break
-            # اگر کلید مستقیم نبود، اولین مقدار عددی بزرگ را بردار
-            if price_rial == 0:
-                for val in data.values():
-                    if isinstance(val, (int, float)) and val > 1000:
+            keys_to_check = ['Price', 'LastPrice', 'Value', 'CurrentPrice', 'price', 'value', 'lastPrice']
+            for key in keys_to_check:
+                if key in data:
+                    val = data[key]
+                    if isinstance(val, (int, float)):
                         price_rial = float(val)
                         break
+            
+            # استراتژی 2: اگر کلید مستقیم نبود، گشتن در مقادیر
+            if price_rial == 0:
+                for key, val in data.items():
+                    if isinstance(val, (int, float)) and val > 1000: # فرض بر اینکه قیمت عدد بزرگی است
+                        price_rial = float(val)
+                        break
+            
+            # استراتژی 3: بررسی آبجکت‌های تو در تو
+            if price_rial == 0:
+                for key, val in data.items():
+                    if isinstance(val, dict):
+                        for sub_key, sub_val in val.items():
+                            if isinstance(sub_val, (int, float)) and sub_val > 1000:
+                                price_rial = float(sub_val)
+                                break
+                    if price_rial > 0: break
+
         elif isinstance(data, list) and len(data) > 0:
             item = data[0]
             if isinstance(item, dict):
-                for key in ['Price', 'LastPrice', 'Value']:
+                keys_to_check = ['Price', 'LastPrice', 'Value', 'CurrentPrice']
+                for key in keys_to_check:
                     if key in item and isinstance(item[key], (int, float)):
                         price_rial = float(item[key])
                         break
         
+        if price_rial == 0:
+            print(f"⚠️ Could not extract price from JSON for {plan_type}")
+            return None
+            
         return price_rial
+
     except Exception as e:
         print(f"❌ Error fetching {plan_type}: {e}")
         return None
 
 def calculate_portfolio_stats(current_price, buy_avg, qty):
-    """محاسبه سود و زیان"""
     total_value = current_price * qty
     total_cost = buy_avg * qty
     gross_profit = total_value - total_cost
-    fee = total_value * 0.01  # کارمزد 1 درصدی فرضی
+    fee = total_value * 0.01
     net_profit = gross_profit - fee
     profit_percent = (net_profit / total_cost) * 100 if total_cost > 0 else 0
     return {
@@ -103,29 +121,47 @@ def calculate_portfolio_stats(current_price, buy_avg, qty):
         "profit_percent": round(profit_percent, 2)
     }
 
-# --- 3. منطق اصلی برنامه ---
+# --- 3. منطق اصلی ---
 
 def main():
     print("🚀 Starting Charisma Metals Monitor...")
     timestamp = datetime.now().isoformat()
 
-    # الف) دریافت قیمت‌ها
     gold_price_rial = fetch_charisma_price("Gold")
     silver_price_rial = fetch_charisma_price("Silver")
 
+    # اگر قیمت‌ها گرفته نشدند، سعی می‌کنیم از ردیس بخوانیم تا سایت خالی نماند
+    use_cached = False
     if not gold_price_rial or not silver_price_rial:
-        print("⛔ Failed to fetch prices. Exiting.")
-        return
+        print("⚠️ Failed to fetch live prices. Attempting to use cached data from Redis...")
+        if redis:
+            try:
+                cached_data = redis.get("latest_market_data")
+                if cached_data:
+                    print("✅ Using cached data.")
+                    data_obj = json.loads(cached_data)
+                    gold_price_toman = data_obj['assets']['gold']['price_toman']
+                    silver_price_toman = data_obj['assets']['silver']['price_toman']
+                    use_cached = True
+                else:
+                    print("❌ No cached data found. Exiting.")
+                    return
+            except:
+                print("❌ Failed to retrieve cache. Exiting.")
+                return
+        else:
+            print("❌ Redis not available. Exiting.")
+            return
 
-    # ب) تبدیل واحد (ریال به تومان و اعمال ضرایب)
-    # طلا: تقسیم بر 10 برای تومان، ضرب در 0.75 برای عیار 18
-    gold_price_toman = (gold_price_rial / 10) * 0.75
-    # نقره: تقسیم بر 10 برای تومان
-    silver_price_toman = silver_price_rial / 10
+    if not use_cached:
+        # محاسبات اگر داده جدید گرفتیم
+        gold_price_toman = (gold_price_rial / 10) * 0.75
+        silver_price_toman = silver_price_rial / 10
+        print(f"💰 Live Gold: {gold_price_toman:,.0f} | Silver: {silver_price_toman:,.0f}")
+    else:
+        print(f"💰 Cached Gold: {gold_price_toman:,.0f} | Silver: {silver_price_toman:,.0f}")
 
-    print(f"💰 Gold: {gold_price_toman:,.0f} Toman | Silver: {silver_price_toman:,.0f} Toman")
-
-    # ج) محاسبات پرتفو
+    # محاسبات پرتفو
     gold_stats = calculate_portfolio_stats(gold_price_toman, PORTFOLIO["gold_buy_avg"], PORTFOLIO["gold_qty"])
     silver_stats = calculate_portfolio_stats(silver_price_toman, PORTFOLIO["silver_buy_avg"], PORTFOLIO["silver_qty"])
     
@@ -134,21 +170,21 @@ def main():
     total_investment = (PORTFOLIO["gold_buy_avg"] * PORTFOLIO["gold_qty"]) + (PORTFOLIO["silver_buy_avg"] * PORTFOLIO["silver_qty"])
     total_profit_percent = (total_net_profit / total_investment) * 100 if total_investment > 0 else 0
 
-    # د) بررسی شرایط هشدار
+    # بررسی هشدار (فقط اگر داده زنده باشد)
     alerts = []
-    if gold_price_toman >= GOLD_THRESHOLD:
-        msg = f"🔔 **هشدار طلا**\nقیمت فعلی: **{gold_price_toman:,.0f}** تومان\nاز مرز {GOLD_THRESHOLD:,.0f} عبور کرد!"
-        send_telegram_alert(msg)
-        alerts.append({"asset": "gold", "message": msg})
-    
-    if silver_price_toman >= SILVER_THRESHOLD:
-        msg = f"🔔 **هشدار نقره**\nقیمت فعلی: **{silver_price_toman:,.0f}** تومان\nاز مرز {SILVER_THRESHOLD:,.0f} عبور کرد!"
-        send_telegram_alert(msg)
-        alerts.append({"asset": "silver", "message": msg})
+    if not use_cached:
+        if gold_price_toman >= GOLD_THRESHOLD:
+            msg = f"🔔 **هشدار طلا**: {gold_price_toman:,.0f} تومان"
+            send_telegram_alert(msg)
+            alerts.append({"asset": "gold", "message": msg})
+        if silver_price_toman >= SILVER_THRESHOLD:
+            msg = f"🔔 **هشدار نقره**: {silver_price_toman:,.0f} تومان"
+            send_telegram_alert(msg)
+            alerts.append({"asset": "silver", "message": msg})
 
-    # هـ) آماده‌سازی داده نهایی
     final_data = {
         "last_updated": timestamp,
+        "source": "cached" if use_cached else "live",
         "assets": {
             "gold": {"price_toman": round(gold_price_toman, 2)},
             "silver": {"price_toman": round(silver_price_toman, 2)}
@@ -161,18 +197,18 @@ def main():
         "alerts": alerts
     }
 
-    # و) ذخیره‌سازی در Upstash Redis
+    # ذخیره در ردیس (حتی اگر کش باشد، تایم‌استمپ آپدیت می‌شود)
     if redis:
         try:
             redis.set("latest_market_data", json.dumps(final_data))
-            # ذخیره تاریخچه (نگهداری 50 رکورد آخر)
-            redis.lpush("market_history", json.dumps({"time": timestamp, "gold": gold_price_toman, "silver": silver_price_toman}))
-            redis.ltrim("market_history", 0, 49)
+            if not use_cached:
+                redis.lpush("market_history", json.dumps({"time": timestamp, "gold": gold_price_toman, "silver": silver_price_toman}))
+                redis.ltrim("market_history", 0, 49)
             print("💾 Data saved to Redis.")
         except Exception as e:
             print(f"❌ Redis Save Error: {e}")
 
-    # ز) تولید فایل JSON برای GitHub Pages
+    # تولید فایل JSON
     try:
         with open("market_data.json", "w", encoding="utf-8") as f:
             json.dump(final_data, f, ensure_ascii=False, indent=2)
