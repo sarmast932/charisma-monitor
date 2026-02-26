@@ -7,7 +7,7 @@ permissions:
 
 on:
   schedule:
-    - cron: '*/1 * * * *'  # تغییر از 5 دقیقه به 1 دقیقه
+    - cron: '*/30 * * * *'  # تغییر از 5 دقیقه به 30 دقیقه
   workflow_dispatch:
 
 jobs:
